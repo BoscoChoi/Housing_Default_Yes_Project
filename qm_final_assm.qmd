@@ -134,11 +134,11 @@ df_major['unit_no']=df_major['application_details.residential_details.total_no_p
 import geopandas as gpd
 
 LDN_BORO = gpd.read_file(
-    f'https://raw.githubusercontent.com/BoscoChoi/fsds/main/QM_Project/Raw_data/LONDON_BOROUGH.gpkg'
+    f'https://raw.githubusercontent.com/BoscoChoi/Housing_Default_Yes_Project/main/Raw_data/LONDON_BOROUGH.gpkg'
 ).to_crs(epsg=27700)
 
 LSOA = gpd.read_file(
-    f'https://raw.githubusercontent.com/BoscoChoi/fsds/main/QM_Project/Raw_data/LSOA_DEC_2021_BOUNDARIES.gpkg'
+    f'https://raw.githubusercontent.com/BoscoChoi/Housing_Default_Yes_Project/main/Raw_data/LSOA_DEC_2021_BOUNDARIES.gpkg'
 ).to_crs(epsg=27700)
 
 # list of london boroughs
@@ -155,7 +155,7 @@ LSOA = LSOA[LSOA['LSOA21NM'].str.contains(pattern, case=False, na=False, regex=T
 #Load PTAL 2023 LSOA and join to LSOA
 
 PTAL = pd.read_csv(
-    f'https://raw.githubusercontent.com/BoscoChoi/fsds/main/QM_Project/Raw_data/LSOA_aggregated_PTAL_stats_2023.csv'
+    f'https://raw.githubusercontent.com/BoscoChoi/Housing_Default_Yes_Project/main/Raw_data/LSOA_aggregated_PTAL_stats_2023.csv'
 )
 PTAL_filtered = PTAL[["LSOA21CD","mean_AI","MEAN_PTAL_"]]
 LSOA = LSOA.merge(PTAL_filtered, how='left', on='LSOA21CD')
@@ -164,14 +164,14 @@ LSOA = LSOA.merge(PTAL_filtered, how='left', on='LSOA21CD')
 ```{python}
 # Load train stations data
 stations = gpd.read_file(
-    f'https://raw.githubusercontent.com/BoscoChoi/fsds/main/QM_Project/Raw_data/Ldn_train_stations.gpkg'
+    f'https://raw.githubusercontent.com/BoscoChoi/Housing_Default_Yes_Project/main/Raw_data/Ldn_train_stations.gpkg'
 ).to_crs(epsg=27700)
 ```
 
 ```{python}
 # Load and clean housing stock data, and join to LSOA
 
-df_stock = pd.read_csv(f'https://raw.githubusercontent.com/BoscoChoi/fsds/main/QM_Project/Raw_data/CTSOP1_1_2024_03_31.csv')
+df_stock = pd.read_csv(f'https://raw.githubusercontent.com/BoscoChoi/Housing_Default_Yes_Project/main/Raw_data/CTSOP1_1_2024_03_31.csv')
 
 # Filter for LSOA data and ecodes that fall within Greater London 
 df_stock_LSOA = df_stock[
@@ -1453,4 +1453,8 @@ Building more in accessible places, no matter through considering PTAL as I argu
 
 Since the government also proposed that residential applications around train stations would be refused if they do not reach at least 40-50 dwellings per hectare in the net developable area of the site, it will be equally interesting to investigate how many past major residential applications in London have already met this threshold. I have faced significant difficulty in trying to clean up the site area field from the applications database as its values have mixed units in either m^2^ or hectares, so I did not go down this route. However, this remains an interesting possibility for further research.
 
-(977 words)
+#### Full reproducible code
+
+The reproducible .qmd file used to generate this analysis piece can be found on my GitHub by clicking [here](https://github.com/BoscoChoi/Housing_Default_Yes_Project).
+
+(999 words)
