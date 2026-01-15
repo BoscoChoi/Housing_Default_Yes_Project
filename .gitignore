@@ -207,14 +207,14 @@ marimo/_lsp/
 __marimo__/
 
 #fsds new addition:
-*.zip
-*.gz
-*.csv
-*.gzip
-*.feather
-*.geofeather
-*.parquet
-*.geoparquet
-*.qgz
-*.gpkg
-data/
+#*.zip
+#*.gz
+#*.csv
+#*.gzip
+#*.feather
+#*.geofeather
+#*.parquet
+#*.geoparquet
+#*.qgz
+#*.gpkg
+#data/
