@@ -1,0 +1,1456 @@
+## 
+
+---
+title: |
+  Next Stop: Homes?  
+  Is the Government’s Push for a “Default Yes” for Housebuilding Close to Train Stations a Good Idea?
+subtitle: By Bosco Choi
+execute:
+  echo: false      # hide all code
+  warning: false   # hide all warnings
+  message: false   # hide all messages
+  results: 'hide'  # hide all printed console output
+format:
+  html:
+    code-copy: true
+    code-link: true
+    toc: true
+    toc-title: On this page
+    toc-depth: 2
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    fontsize: 12pt
+  pdf:
+    include-in-header:
+      text: |
+        \usepackage{ragged2e}
+        \RaggedRight
+    fontsize: 12pt
+    papersize: a4
+    mainfont: "Helvetica Neue"
+    sansfont: "Helvetica Neue"
+    monofont: "Helvetica Neue"
+    geometry:
+      - top=25mm
+      - left=25mm
+      - right=25mm
+      - bottom=25mm
+      - heightrounded
+    toc: false
+    number-sections: false
+    colorlinks: true
+    highlight-style: github
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .qmd
+      format_name: quarto
+      format_version: '1.0'
+      jupytext_version: 1.15.2
+  kernelspec:
+    display_name: Python 3 (ipykernel)
+    language: python
+    name: python3
+---
+
+London has again fallen short of its housing targets. The first 9 months of 2025 saw only around [3,000 units](https://www.savills.co.uk/blog/article/382106/residential-property/changes-incoming-to-london-s-planning-system---solving-london-s-housing-crisis-.aspx) of private housing being started, well behind the Mayor’s target of 52,000 new homes per year. The government has already tried to remove regulatory barriers to speed up housing supply, by relaxing Greenbelt restrictions for housebuilding and removing dual-aspect requirement for new-built London homes. Now, here is another one: [a “default yes” for housebuilding close to train stations](https://www.gov.uk/government/news/housebuilding-around-train-stations-will-be-given-default-yes).
+
+In the proposed reforms to the National Planning Policy Framework, the government announced their intention to support housing proposals around train stations, with a “default yes” to planning applications within a reasonable walking distance of well-connected stations.
+
+What’s a “reasonable walking distance” has not been explicitly defined, but Matthew Pennycook, the Minister for Housing and Planning, suggested that [800m](https://hansard.parliament.uk/commons/2025-12-16/debates/2B9FAE0D-691F-4D79-86D0-3D4C1B51D6E3/PlanningReform) could be a possibility. For well-connected stations, they have to be served by 4 trains per hour, or 2 trains per hour in any direction, on weekdays[^1].
+
+[^1]: There is an additional criterion of being located in a top 60 [Travel to Work Area](https://www.ons.gov.uk/economy/economicoutputandproductivity/publicservicesproductivity/articles/productivityintownsandtraveltoworkareasuk/2019) by Gross Value Added, but London surely meets the requirement.
+
+These interventions are framed as ways to encourage building right homes in the right places, and to “get Britain building” by lowering time and financial costs for developers in the lengthy planning application processes.
+
+```{python}
+# get major planning application data points from 2021-2025 as df
+
+import requests
+import pandas as pd
+from pandas import json_normalize
+
+#connect to planning london datahub public API and write an elastic search query to get the data
+API_BASE = "https://planningdata.london.gov.uk/api-guest"
+API_HEADER = {"X-API-AllowRequest": "be2rmRnt&"}
+
+url = f"{API_BASE}/applications/_search"
+
+query = {
+    "from": 0,
+    "size": 10000,
+    "query": {
+        "bool": {
+            "must": [
+                {
+                    "range": {
+                        "application_details.residential_details.total_no_proposed_residential_units": {
+                            "gte": 10
+                        }
+                    }
+                },
+                {
+                    "range": {
+                        "decision_date": {
+                            "format": "strict_date_optional_time",
+                            "gte": "2021-01-01T00:00:00.000Z",
+                            "lt": "2026-01-01T00:00:00.000Z"
+                        }
+                    }
+                }
+            ]
+        }
+    }
+}
+
+
+response = requests.post(url, json=query, headers=API_HEADER)
+response.raise_for_status()
+
+hits = response.json().get("hits", {}).get("hits", [])
+records = [hit["_source"] for hit in hits]
+
+# flatten nested JSON
+df_major = json_normalize(records)
+pd.set_option("display.max_columns", None)
+pd.set_option("display.width", 200)
+
+# Change the data type of decision&validation date field to date
+df_major['decision_date'] = pd.to_datetime(df_major.decision_date.array, format="%d/%m/%Y")
+df_major['valid_date'] = pd.to_datetime(df_major.valid_date.array, format="%d/%m/%Y")
+
+# Change the data type of lat long to float
+df_major['centroid.lon']=df_major["centroid.lon"].astype("float")
+df_major['centroid.lat']=df_major["centroid.lat"].astype("float")
+
+# Rename and copy the field of proposed number of dwellings
+df_major['unit_no']=df_major['application_details.residential_details.total_no_proposed_residential_units']
+```
+
+```{python}
+#Load LSOA 2021 geopackage files and filter to London only
+
+import geopandas as gpd
+
+LDN_BORO = gpd.read_file(
+    f'https://raw.githubusercontent.com/BoscoChoi/Housing_Default_Yes_Project/main/Raw_data/LONDON_BOROUGH.gpkg'
+).to_crs(epsg=27700)
+
+LSOA = gpd.read_file(
+    f'https://raw.githubusercontent.com/BoscoChoi/Housing_Default_Yes_Project/main/Raw_data/LSOA_DEC_2021_BOUNDARIES.gpkg'
+).to_crs(epsg=27700)
+
+# list of london boroughs
+london_boroughs = LDN_BORO.name.unique().tolist()
+
+# for the next step: Build regex pattern — escape special chars and join with | 
+pattern = "|".join([rf"\b{b.replace(' ', r'\s+')}\b" for b in london_boroughs])
+
+# Filter for LSOA data and ecodes that fall within Greater London 
+LSOA = LSOA[LSOA['LSOA21NM'].str.contains(pattern, case=False, na=False, regex=True)]
+```
+
+```{python}
+#Load PTAL 2023 LSOA and join to LSOA
+
+PTAL = pd.read_csv(
+    f'https://raw.githubusercontent.com/BoscoChoi/Housing_Default_Yes_Project/main/Raw_data/LSOA_aggregated_PTAL_stats_2023.csv'
+)
+PTAL_filtered = PTAL[["LSOA21CD","mean_AI","MEAN_PTAL_"]]
+LSOA = LSOA.merge(PTAL_filtered, how='left', on='LSOA21CD')
+```
+
+```{python}
+# Load train stations data
+stations = gpd.read_file(
+    f'https://raw.githubusercontent.com/BoscoChoi/Housing_Default_Yes_Project/main/Raw_data/Ldn_train_stations.gpkg'
+).to_crs(epsg=27700)
+```
+
+```{python}
+# Load and clean housing stock data, and join to LSOA
+
+df_stock = pd.read_csv(f'https://raw.githubusercontent.com/BoscoChoi/Housing_Default_Yes_Project/main/Raw_data/CTSOP1_1_2024_03_31.csv')
+
+# Filter for LSOA data and ecodes that fall within Greater London 
+df_stock_LSOA = df_stock[
+    (df_stock['geography'] == 'LSOA') &
+    (df_stock['area_name'].str.contains(pattern, case=False, na=False, regex=True))
+]
+
+# Join to LSOA
+LSOA = LSOA.merge(df_stock_LSOA[["ecode","all_properties"]], how='left', left_on='LSOA21CD',right_on="ecode")
+```
+
+```{python}
+# computing distance to nearest train stations for each LSOA
+
+# create centroid point layer for LSOA
+LSOA_centroids = LSOA.copy()
+LSOA_centroids["geometry"] = LSOA_centroids.geometry.centroid
+
+# distance to nearest train station
+LSOA_nearest = gpd.sjoin_nearest(
+    LSOA_centroids,
+    stations[["geometry"]],
+    how="left",
+    distance_col="dist_to_station_m"
+)
+
+# Join distance back to LSOA polygons
+LSOA["dist_to_station_m"] = LSOA_nearest["dist_to_station_m"].values
+```
+
+```{python}
+# computing stock density for each LSOA 
+
+LSOA["dph_LSOA"] = LSOA.all_properties / LSOA.geometry.area * 10000
+```
+
+```{python}
+# Spatialise application as points 
+
+# xy to points
+gdf_major = gpd.GeoDataFrame(df_major, 
+            geometry=gpd.points_from_xy(
+                        df_major['centroid.lon'], 
+                        df_major['centroid.lat'], 
+                        crs='epsg:4326'
+            )
+      ).to_crs(epsg=27700)
+```
+
+```{python}
+#Joining some PTAL values and stock density values to points
+
+gdf_major = gpd.sjoin(gdf_major, LSOA[["LSOA21CD","mean_AI","MEAN_PTAL_","geometry","dph_LSOA"]], how='left', predicate='within')
+```
+
+```{python}
+# split the gdf by decision type into dfs
+gdfs = {
+    dec: group.copy()
+    for dec, group in gdf_major.groupby("decision")
+}
+```
+
+```{python}
+# Cleans up the decision field 
+
+# 1. Normalise decision text
+gdf_major['decision_norm'] = (
+    gdf_major['decision']
+    .astype(str)
+    .str.strip()
+    .str.upper()
+)
+
+# 2. Define mappings
+approved_values = {
+    'APPROVED',
+    'ALLOWED',
+    'NO OBJECTION TO PROPOSAL (OBS ONLY)',
+    'PARG',
+    'CDS106',
+    'COND',
+    'FDO',
+    'GSUU',
+    'NDAALW'
+}
+
+refused_values = {
+    'REFUSED',
+    'REF',
+    'DECLINED TO DETERMINE',
+}
+
+# 3. Create clean decision field
+gdf_major['decision_clean'] = pd.NA
+
+gdf_major.loc[
+    gdf_major['decision_norm'].isin(approved_values),
+    'decision_clean'
+] = 'approved'
+
+gdf_major.loc[
+    gdf_major['decision_norm'].isin(refused_values),
+    'decision_clean'
+] = 'refused'
+
+# 4. Filter to approved / refused only
+gdf_major_filtered = gdf_major[
+    gdf_major['decision_clean'].notna()
+].copy()
+
+# 5. binary field to record decision
+gdf_major_filtered["decision_binary"] = gdf_major_filtered["decision_clean"].map({
+    "approved": 1,
+    "refused": 0
+})
+```
+
+```{python}
+# num removed cuz of no decision
+
+no_decision_sum = gdf_major['decision_clean'].isna().sum()
+```
+
+```{python}
+# Filter away applications with invalid coordinates and save separately
+
+gdf_major_nocoord = gdf_major_filtered[(gdf_major_filtered["centroid.lat"] <= 51) | (gdf_major_filtered["centroid.lat"] >= 52)]
+gdf_major_filtered = gdf_major_filtered[(gdf_major_filtered["centroid.lat"] > 51) & (gdf_major_filtered["centroid.lat"] < 52)]
+```
+
+```{python}
+# add an additional field of decision duration to the filtered gdf
+
+gdf_major_filtered["decision_days"] = (
+    gdf_major_filtered["decision_date"] - gdf_major_filtered["valid_date"]
+).dt.days
+
+# decision time turned to weeks
+gdf_major_filtered ['decision_wks'] = gdf_major_filtered["decision_days"]/7
+```
+
+```{python}
+# computing distance to nearest train stations for each application
+
+# Remove leftover spatial join columns if they exist
+gdf_major_filtered = gdf_major_filtered.drop(
+    columns=["index_right"],
+    errors="ignore"
+)
+
+# distance to nearest train station
+app_nearest = gpd.sjoin_nearest(
+    gdf_major_filtered,
+    stations[["geometry"]],
+    how="left",
+    distance_col="dist_to_station_m"
+)
+
+# Join distance back to applications gdf
+gdf_major_filtered["dist_to_station_m"] = app_nearest["dist_to_station_m"].values
+
+# Assign a field of within 800m buffer or not
+gdf_major_filtered["in_buffer"] = (
+    gdf_major_filtered["dist_to_station_m"] <= 800
+).astype(int)
+```
+
+```{python}
+# This code block has no effect on the entire analysis's result, just kept to open up possible alternative analysis route
+# Computing proposed density at each application site
+
+import numpy as np
+
+# ensure numeric
+gdf_major_filtered["application_details.site_area"] = pd.to_numeric(
+    gdf_major_filtered["application_details.site_area"],
+    errors="coerce"
+)
+
+# convert everything to hectares
+gdf_major_filtered["site_area_ha"] = np.where(
+    gdf_major_filtered["application_details.site_area"] >= 50,  # assume m²
+    gdf_major_filtered["application_details.site_area"] / 10000,   # m² → ha
+    gdf_major_filtered["application_details.site_area"]              # already ha
+)
+
+#clearing null values and very small values
+MIN_SITE_HA = 0.00005
+area = gdf_major_filtered["site_area_ha"]
+area_clean = area.where(
+    (area >= MIN_SITE_HA),
+    np.nan
+)
+
+# calculation of dph for each application
+gdf_major_filtered['dph_app'] = gdf_major_filtered['unit_no']/area_clean
+
+# split by dph > 10000 or <= 10000
+gdf_major_extreme_dph = gdf_major_filtered[
+    (gdf_major_filtered["dph_app"] > 10000) | (pd.isna(gdf_major_filtered["dph_app"]))
+]
+gdf_major_sensible_dph = gdf_major_filtered[gdf_major_filtered["dph_app"] <= 10000]
+
+# calculate the out of character level
+gdf_major_sensible_dph ["out_cha"] = gdf_major_sensible_dph ["dph_app"] / gdf_major_sensible_dph ["dph_LSOA"]
+```
+
+```{python}
+# this code block is for my own EDA only, do not show in the final article output
+#sns pairplot to uncover relationship between variables for application points
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+cluster_variables = [
+    "dist_to_station_m",
+    "decision_days",
+    "mean_AI",
+    "unit_no",
+    "dph_LSOA",
+    "dph_app",
+    "out_cha"
+]
+
+
+df_log = gdf_major_sensible_dph[cluster_variables].copy()
+
+# Apply log1p to all variables
+for col in df_log.columns:
+    df_log[col] = np.log1p(df_log[col])
+    
+gdf_major_plot = df_log.dropna()
+
+
+#g = sns.pairplot(
+#    gdf_major_plot, kind="reg", diag_kind="kde"
+#)
+```
+
+```{python}
+# create gdf filtered for applications >150 units
+gdf_150major = gdf_major_filtered[gdf_major_filtered["unit_no"]>150]
+
+```
+
+```{python}
+def create_summary_table(
+    gdf,
+    group_var,         # e.g., "MEAN_PTAL_", "LPA_NAME", "in_buffer"
+    unit_field="unit_no",
+    decision_field="decision_clean"
+):
+    """
+    Create summary table of planning applications by a grouping variable.
+    Includes both application-count and unit-based approval metrics.
+    """
+
+    # -----------------------------
+    # 1. Application counts
+    # -----------------------------
+    summary = (
+        gdf
+        .groupby([group_var, decision_field])
+        .size()
+        .unstack(fill_value=0)
+        .reset_index()
+    )
+
+    for col in ["approved", "refused"]:
+        if col not in summary.columns:
+            summary[col] = 0
+
+    summary["approval_rate"] = (
+        summary["approved"] /
+        (summary["approved"] + summary["refused"])
+    )
+
+    # -----------------------------
+    # 2. Unit sums by decision
+    # -----------------------------
+    unit_summary = (
+        gdf
+        .groupby([group_var, decision_field])[unit_field]
+        .sum()
+        .unstack(fill_value=0)
+        .reset_index()
+    )
+
+    for col in ["approved", "refused"]:
+        if col not in unit_summary.columns:
+            unit_summary[col] = 0
+
+    unit_summary = unit_summary.rename(
+        columns={
+            "approved": "approved_units",
+            "refused": "refused_units"
+        }
+    )
+
+    unit_summary["unit_approval_rate"] = (
+        unit_summary["approved_units"] /
+        (unit_summary["approved_units"] + unit_summary["refused_units"])
+    )
+
+    # -----------------------------
+    # 3. Mean units per application
+    # -----------------------------
+    mean_units = (
+        gdf
+        .groupby(group_var)[unit_field]
+        .mean()
+        .rename("mean_units")
+    )
+
+    # -----------------------------
+    # 4. Merge everything together
+    # -----------------------------
+    summary = (
+        summary
+        .merge(unit_summary, on=group_var, how="left")
+        .merge(mean_units, on=group_var, how="left")
+    )
+
+    return summary
+```
+
+```{python}
+#calculate percentage of major applications within and outside 800 m of nearest train station
+
+# Number of applications within 800m
+n_within = gdf_major_filtered[gdf_major_filtered.in_buffer==1].shape[0]
+
+# Total number of applications
+n_total = gdf_major_filtered.shape[0]
+
+# Percentage
+in800_per = n_within / n_total * 100
+out800_per = (n_total - n_within) / n_total * 100
+```
+
+```{python}
+# Histogram of decision time of major planning applications, stacked by proximity to train stations, for all major apps
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+
+# Drop missing and invalid decision times
+df_plt1 = gdf_major_filtered.dropna(subset=["decision_wks", "in_buffer"])
+df_plt1 = df_plt1[df_plt1["decision_days"]>0]  
+
+# Set up the figure
+plt.figure(figsize=(10, 6))
+
+# Histogram with stacked bars (COUNTS)
+ax = sns.histplot(
+    data=df_plt1,
+    x="decision_wks",
+    hue="in_buffer",
+    multiple="stack",
+    stat="count",
+    bins=70,
+    alpha=0.7,
+    edgecolor="white",
+    linewidth=0.5,
+    palette={1: "#2E6260", 0: "#4E3C56"},
+    legend=True
+#    kde=True
+)
+
+#statutory decision threshold
+threshold = 13
+
+# Add vertical lines for statutory threshold
+plt.axvline(threshold, color="black", linestyle="solid", linewidth=1)
+
+# Annotate statutory threshold
+
+plt.text(
+    threshold,
+    plt.gca().get_ylim()[1] * 0.85,
+    f"Statutory target = {threshold:.0f} weeks",
+    color="black",
+    ha="left",
+    va="top",
+    fontsize=10
+)
+
+# Custom labels and title
+plt.title(
+    "How long did major residential planning applications \nin London take to be determined?",
+    fontsize=16,
+    fontweight="bold"
+)
+plt.xlabel("Decision time (weeks)")
+plt.ylabel("Number of applications")
+
+# Get current legend
+legend = ax.get_legend()
+
+# Replace legend text (order must match hue_order)
+legend.set_title("Proximity to train station")
+legend.texts[0].set_text(f"Outside 800m ({out800_per:.0f}%)")
+legend.texts[1].set_text(f"Within 800m ({in800_per:.0f}%)")
+
+# footnotes
+plt.figtext(
+    0.01, 0.01,
+    "Source: \nPlanning applications: Planning London Datahub, Greater London Authority (Data taken from 2021-2025) \nTrain Station: Ordinance Survey(2025) \n\nNote: \nProximity to train station calculated using straight-line distance",
+    ha="left",
+    va="top",
+    fontsize=9,
+    color="grey"
+)
+
+sns.despine()
+plt.tight_layout()
+
+
+
+# plt.show()
+```
+
+```{python}
+# Calculate the percentage of major applications determined on time
+
+# Number of applications determined on time
+n_on_time = gdf_major_filtered[gdf_major_filtered.decision_wks<=13].shape[0]
+
+# Percentage determined on time
+on_time_per = n_on_time / n_total * 100
+```
+
+```{python}
+# estimate the time saveable by the default yes 
+
+time_save = (
+    gdf_major_filtered.loc[
+        gdf_major_filtered.dist_to_station_m <= 800,
+        "decision_wks"
+    ].sum()
+    *0.25
+) / 52 / 5
+```
+
+A dive into the planning applications database revealed that in the past 5 years, only **`{python} f"{on_time_per:,.0f}%"`** of the [major residential applications](https://www.planninggeek.co.uk/planning/applications/minor-or-major-planning/)[^2] were decided within the statutory time limit of [13 weeks](https://www.gov.uk/guidance/determining-a-planning-application).
+
+[^2]: Defined as applications with 10 or more dwellings proposed
+
+Considerable attention should be given to the 800m radius, as **`{python} f"{in800_per:,.0f}%"`** of the major residential applications were located within 800m from a train station. Based on historical trends, setting the boundary at 800m means that a significant proportion of major housing schemes can be going through the default approval route in the future, without considering extra stimulation effects brought by the new policy.
+
+Assuming wildly that decision time can be cut by 25% for all those on the default route, this could translate into a rough total per-year saving of **`{python} f"{time_save:,.0f}"`** years from the time taken to get planning decisions in London. Obviously, this would depend on the complexity of the conditions to be fulfilled by the developer in order to convert a “default yes” into an “actual yes”.
+
+```{python}
+# create summary table broken down by PTAL
+summary_buffer = create_summary_table(gdf_major_filtered, "in_buffer")
+```
+
+```{python}
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Map in_buffer to meaningful labels
+summary_buffer["buffer_label"] = summary_buffer["in_buffer"].map({
+    0: "Outside 800m",
+    1: "Within 800m"
+})
+
+# Calculate percentage of total applications for each buffer
+total_apps = summary_buffer["approved"] + summary_buffer["refused"]
+summary_buffer["percent_total"] = total_apps / total_apps.sum() * 100
+
+# Update buffer_label to include percentage
+summary_buffer["buffer_label"] = summary_buffer.apply(
+    lambda row: f"{row['buffer_label']} ({row['percent_total']:.1f}%)", axis=1
+)
+
+# Sort by in_buffer for plotting
+summary_buffer = summary_buffer.sort_values("in_buffer")
+
+# X positions
+x = np.arange(len(summary_buffer))
+
+
+```
+
+```{python}
+def plot_stacked_approvals(
+    ax,
+    x,
+    approved,
+    refused,
+    approval_rate,
+    labels,
+    title,
+    ylabel,
+    xlabel="Proximity to train station",
+    title_fontsize=13,
+    title_fontweight="bold"
+):
+    color_approved = "#88CC88"  # pale green
+    color_refused = "#FF8888"   # pale red
+
+    ax.bar(x, approved, color=color_approved, label="Approved")
+    ax.bar(x, refused, bottom=approved, color=color_refused, label="Refused")
+
+    # Annotate approval rate inside approved bar
+    for i in range(len(x)):
+        if approved.iloc[i] > 0:
+            ax.text(
+                x[i],
+                approved.iloc[i] / 2,
+                f"{approval_rate.iloc[i] * 100:.0f}%",
+                ha="center",
+                va="center",
+                fontsize=12,
+                fontweight="bold",
+                color="black"
+            )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(
+    title,
+    fontsize=title_fontsize,
+    fontweight=title_fontweight
+)
+```
+
+```{python}
+fig, axes = plt.subplots(1, 2, figsize=(12, 6), sharey=False)
+
+# --- LEFT: by application count ---
+plot_stacked_approvals(
+    ax=axes[0],
+    x=x,
+    approved=summary_buffer["approved"],
+    refused=summary_buffer["refused"],
+    approval_rate=summary_buffer["approval_rate"],
+    labels=summary_buffer["buffer_label"],
+    title="By number of applications",
+    ylabel="Number of applications"
+)
+
+# --- RIGHT: by units ---
+plot_stacked_approvals(
+    ax=axes[1],
+    x=x,
+    approved=summary_buffer["approved_units"],
+    refused=summary_buffer["refused_units"],
+    approval_rate=summary_buffer["unit_approval_rate"],
+    labels=summary_buffer["buffer_label"],
+    title="By number of proposed homes",
+    ylabel="Number of homes"
+)
+
+# Shared legend
+axes[0].legend(loc="upper left")
+
+# Figure-level title
+fig.suptitle(
+    "What were the approval patterns of major \nresidential planning applications in the past 5 years?",
+    fontsize=20,
+    fontweight="bold",
+    y=1.03
+)
+
+# Footnotes
+fig.text(
+    0.01, -0.15,
+    "Source:\nPlanning London Datahub, Greater London Authority (2021–2025)\n"
+    "Train Stations: Ordnance Survey (2025)\n\n"
+    "Note:\nProximity to train station calculated using straight-line distance.\n"
+    "Percentage approved marked in bold.",
+    ha="left",
+    va="bottom",
+    fontsize=9,
+    color="grey"
+)
+
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+# calculate percentage of homes rejected
+
+appr_homes_sum = summary_buffer["approved_units"].sum()
+refu_homes_sum = summary_buffer["refused_units"].sum()
+
+homes_rejected_rate = refu_homes_sum / (refu_homes_sum + appr_homes_sum) * 100
+```
+
+While it seems like there is a considerable potential for speeding up housebuilding brought by the “default yes”, it does not appear like the planning system has been blocking new housing in London, seeing that only **`{python} f"{homes_rejected_rate:,.0f}%"`** of the proposed homes were given red light eventually. Contrary to [some analysts’ optimism](https://lichfields.uk/blog/2025/december/16/all-aboard-or-stuck-between-stations-how-the-new-nppf-might-unlock-growth-around-rail-stations) about the development that can be “unlocked” near stations, an additional tilt towards green-lighting housebuilding near stations itself is unlikely to bring substantially more housing, at least not for London, when the vast majority of housing schemes, especially large-scale ones, have already been supported. Instead, a further tilt in the balance might bring worries about quality.
+
+Another caveat is that the 800m buffer seems to be too blunt. Despite strong national and London-wide planning policy support for building in sustainable locations before the “default yes” came out, approval rate did not show significant differences across the 800m boundary. Does the 800m buffer provide a good estimation of whether the location is sustainable?
+
+```{python}
+#plotting the scatterplot between mean_AI and distance to train station
+plt.figure(figsize=(8, 6), constrained_layout=True)
+
+LSOA_cluster_variables = [
+    "dist_to_station_m",
+    "mean_AI",
+    "dph_LSOA"
+]
+
+df_corr = LSOA[LSOA_cluster_variables].copy()
+df_corr_log = df_corr.copy()
+
+# Apply log1p to all variables
+for col in df_corr_log.columns:
+    df_corr_log[col] = np.log1p(df_corr_log[col])
+    
+gdf_corr_plot = df_corr_log.dropna()
+
+# plot figure
+plt.scatter(gdf_corr_plot['dist_to_station_m'], gdf_corr_plot['mean_AI'], alpha=0.7, edgecolor='k')
+
+# Axis labels
+plt.xlabel('Distance to nearest train station (Log scale)')
+plt.ylabel('Public Transport Accessibility by PTAL Access Index \n(Log scale, higher=better)')
+
+# Title
+plt.title('How strongly does distance to train station \ndetermine public transport accessibility?',
+          fontsize=14,
+          fontweight="bold"
+)
+
+# Footnotes
+plt.figtext(
+    0.01, 0.01,
+    "Note: \nCorrelation plotted for each LSOA in London (ONS, 2021) \nBoth axes transformed with natural logarithm to better show correlation \nProximity to train station calculated using straight-line distance \n\nOther Data Sources: \nTrain Staions: Ordinance Survey(2025) \nPTAL: TfL(2023)",
+    ha="left",
+    va="top",
+    fontsize=9,
+    color="grey"
+)
+
+# vertical threhold line
+threshold_m = 800
+x_thresh = np.log1p(threshold_m)
+
+plt.axvline(
+    x=x_thresh,
+    linestyle='--',
+    linewidth=2,
+    alpha=0.9
+)
+
+plt.annotate(
+    'Proposed 800m threshold',
+    xy=(x_thresh, gdf_corr_plot['mean_AI'].max()),
+    xytext=(5, -10),
+    textcoords='offset points',
+    rotation=0,
+    va='top',
+    ha='left'
+)
+
+# Optional: grid
+plt.grid(True, linestyle='--', alpha=0.5)
+
+plt.show()
+```
+
+```{python}
+# calculate pearson correlation coefficient between PTAL and distance to train station
+from scipy import stats
+from scipy.stats import pearsonr, spearmanr
+
+# Calculate Pearson correlation for no log
+corr_coef, p_value = pearsonr(df_corr['dist_to_station_m'], df_corr['mean_AI'])
+
+# Calculate R2 in %
+R2 = corr_coef ** 2 * 100
+
+
+
+# Calculate Pearson correlation for log
+corr_coef_log, p_value_log = pearsonr(gdf_corr_plot['dist_to_station_m'], gdf_corr_plot['mean_AI'])
+
+# Calculate R2_log in %
+R2_log = corr_coef_log ** 2 * 100
+
+
+```
+
+```{python}
+# calculate pearson correlation coefficient with p-values for 3 variables without log
+
+# !pip install pingouin
+import pingouin as pg
+
+# Calculate correlation matrix with p-values
+corr_results = pg.pairwise_corr(df_corr, columns=LSOA_cluster_variables, method='pearson')
+
+#print(corr_results)
+```
+
+```{python}
+# calculate pearson correlation coefficient with p-values for 3 variables with log
+
+# Calculate correlation matrix with p-values
+corr_results = pg.pairwise_corr(gdf_corr_plot, columns=LSOA_cluster_variables, method='pearson')
+
+#print(corr_results)
+```
+
+To answer the question, we can look at the dataset of [Public Transport Accessibility Level (PTAL)](https://experience.arcgis.com/experience/4c88d5310df34e21bcb3a50ae9c0a159/page/PTAL-Query?block_id=layout_276_block_11&intcmp=26162) from TfL, which considers not only distance to public transport but also service frequency, and includes a range of transport options.
+
+Based on this dataset, we can see that between all neighbourhoods in London, public transport accessibility can still vary significantly even with the same distance to a nearest train station, not to mention that within the 800m buffer, there can be variations in accessibility between locations of different distances to stations. A simple 2-categories cut at 800m does not represent accessibility very well.[^3]
+
+[^3]: See appendix for more details
+
+```{python}
+# create summary table broken down by PTAL
+summary_PTAL = create_summary_table(gdf_major_filtered, "MEAN_PTAL_")
+```
+
+```{python}
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Sort PTAL for plotting
+summary_PTAL = summary_PTAL.sort_values("MEAN_PTAL_")
+
+# rename ptal levels to east public understanding
+summary_PTAL["MEAN_PTAL_"].replace(
+    {
+        "6b": "6b (highest)",
+        "1a": "1a (lowest)"
+    },
+    inplace=True
+)
+
+# X positions
+x = np.arange(len(summary_PTAL))
+
+# Bar heights
+approved = summary_PTAL["approved"]
+refused = summary_PTAL["refused"]
+total = approved + refused
+
+# Colors (paler)
+color_approved = "#88CC88"  # pale green
+color_refused = "#FF8888"   # pale red
+
+# Create figure
+plt.figure(figsize=(10, 6))
+
+# Plot approved first (bottom), then refused on top
+plt.bar(x, approved, color=color_approved, label="Approved")
+plt.bar(x, refused, bottom=approved, color=color_refused, label="Refused")
+
+# Annotate approval % inside green bar
+for i, row in summary_PTAL.iterrows():
+    if approved[i] > 0:
+        plt.text(
+            x=i,
+            y=approved[i]/2,  # center of approved portion
+            s=f"{row['approval_rate']*100:.0f}%",  # show percentage only
+            ha="center",
+            va="center",
+            fontsize=12,
+            fontweight="bold",
+            color="black"
+        )
+
+# X-axis labels
+plt.xticks(x, summary_PTAL["MEAN_PTAL_"])
+plt.xlabel("Public Transport Accessibility Level (PTAL)")
+plt.ylabel("Number of applications")
+plt.title("How were approval patterns of major planning applications \nrelated to transport accessibility?",
+         fontsize=18,
+         fontweight="bold"
+)
+
+# Legend
+plt.legend()
+
+# footnotes
+plt.figtext(
+    0.01, 0.01,
+    "Source: \nPlanning London Datahub, Greater London Authority (Data taken from 2021-2025) \nPTAL: TfL(2023) \n\nNote: \nPercentage approved marked in bold ",
+    ha="left",
+    va="top",
+    fontsize=9,
+    color="grey"
+)
+
+plt.tight_layout()
+# plt.show()
+```
+
+When we break approval rates down by PTAL, a clearer pattern emerges: areas with better public transport accessibility tend to see much higher approval rates, except for PTAL 6a. This approach reveals far more nuance than a simple 800-metre rule, and it takes more transport modes and their frequencies into account. Building this into the “default yes” policy would give a more holistic picture.
+
+The government indeed tried to define “well-connected stations” using a single threshold for train frequency. But 2 trains per hour in any direction does not seem too difficult to meet for most of London’s train stations. When we have a handy PTAL dataset for London, why not use it to set more graduated levels of support for housebuilding based on how accessible an area really is—perhaps through the next London Plan? It may be more complex to administer, but it would better ensure right homes in the *right* places.
+
+Anyways, to help strengthen the emphasis of developing in sustainable locations, I have classified London neighbourhoods into several clusters to close off this analysis with something to move forward with. Clusters are grouped based on existing neighbourhood density, PTAL levels, and distance to train stations. The green areas on the map below highlights opportunity areas for further densification and development, since they have lower existing density, and good public transport accessibility with train stations very nearby. On the list of green areas, we have New Cross, Peckham, Kennington, Clapham, Mile End, Hampstead, Barking, etc.
+
+```{python}
+from sklearn.impute import KNNImputer
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans, AgglomerativeClustering
+from scipy.cluster.hierarchy import dendrogram
+
+# preparing gdf for clustering
+cols_for_clustering = [
+    "mean_AI","dist_to_station_m","dph_LSOA"
+]
+
+gdf_LSOA_reduced = LSOA[cols_for_clustering].copy()
+```
+
+```{python}
+# standardisation
+scaler = StandardScaler()
+
+scaled_array = scaler.fit_transform(gdf_LSOA_reduced)
+
+gdf_LSOA_scaled = pd.DataFrame(
+    scaled_array,
+    columns=cols_for_clustering,
+    index=LSOA.index
+)
+```
+
+```{python}
+# run K-means with chosen K
+
+k_val = 7 
+
+kmeans_final = KMeans(
+    n_clusters=k_val,
+    random_state=42,
+    n_init="auto"
+)
+
+kmeans_final.fit(gdf_LSOA_scaled)
+
+kmeans_labels = kmeans_final.labels_
+
+# Store labels in the LSOA dataframes
+LSOA["cluster_kmeans"] = kmeans_labels
+gdf_LSOA_scaled["cluster_kmeans"] = kmeans_labels
+
+#print(LSOA["cluster_kmeans"].value_counts().sort_index())
+
+# name the clusters
+cluster_name_map = {
+    0: "Inner–Outer London Transition Zone (less dense, high accessibility)",
+    4: "Inner–Outer London Transition Zone (dense, medium accessibility)",
+    2: "Accessible Suburbs",
+    1: "Very Remote Suburbs",
+    6: "Remote Suburbs",
+    5: "Central London",
+    3: "Dense Enclaves"
+}
+
+# new descriptive cluster field
+LSOA["cluster_name"] = LSOA["cluster_kmeans"].map(cluster_name_map)
+gdf_LSOA_scaled["cluster_name"] = gdf_LSOA_scaled["cluster_kmeans"].map(cluster_name_map)
+```
+
+```{python}
+#Get the cluster cetroids in scaled version
+centroids_scaled = kmeans_final.cluster_centers_
+
+df_centroids_scaled = pd.DataFrame(
+    centroids_scaled,
+    columns=cols_for_clustering
+)
+df_centroids_scaled.index = [f"Cluster {i}" for i in range(k_val)]
+
+#examine the cluster cetroids back in orginal units
+centroids_original = scaler.inverse_transform(centroids_scaled)
+
+df_centroids = pd.DataFrame(
+    centroids_original,
+    columns=cols_for_clustering
+)
+df_centroids.index = [f"Cluster {i}" for i in range(k_val)]
+
+#print(df_centroids)
+```
+
+```{python}
+# cluster map
+
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+
+# cluster colour scheme
+cluster_colors = {
+    "Inner–Outer London Transition Zone (less dense, high accessibility)": "#8BC34A",  # soft green
+    "Inner–Outer London Transition Zone (dense, medium accessibility)": "#E57373",   # soft red
+    "Accessible Suburbs": "#FFF176",  # pale yellow
+    "Very Remote Suburbs": "#BA68C8", # soft purple
+    "Remote Suburbs": "#64B5F6",      # soft blue
+    "Central London": "#FFB74D",      # soft orange
+    "Dense Enclaves": "grey"       # grey
+}
+
+# Plot map
+
+fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+
+LSOA.plot(
+    color=LSOA["cluster_name"].map(cluster_colors),  # map cluster to manual color
+    linewidth=0.2,
+    edgecolor=None,
+    legend=False,
+    ax=ax
+)
+
+# Create legend patches
+patches = [mpatches.Patch(color=color, label=cluster) for cluster, color in cluster_colors.items()]
+
+# Add legend with precise positioning
+ax.legend(
+    handles=patches,
+#    title="Cluster Name",
+    loc='lower left',
+    bbox_to_anchor=(0, -0.07),  # move it slightly down
+    fontsize=8,
+    title_fontsize=10,
+    frameon=True,
+    framealpha=0.9
+)
+
+# Footnotes
+plt.figtext(
+    0.5, 0.15,
+    "Source: \nHousing Stock: Valuation Office Agency(2024)\nPTAL: TfL(2023)\nTrain Station: Ordinance Survey(2025)",
+    ha="left",
+    va="top",
+    fontsize=9,
+    color="grey"
+)
+
+#title
+ax.set_title(
+    "How do existing neighbourhoods exhibit clustering \nfor density and transport accessibility?", 
+    fontsize=20,
+    fontweight="bold",
+    loc="left"
+)
+ax.set_axis_off()
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+# radar chart viz for multiple dimensions
+
+def radar_plot_cluster_centroids(df_cluster_centroid, cluster_name_map=None, col_label_map=None, cluster_colors=None):
+    # Axis labels
+    categories = df_cluster_centroid.columns.values.tolist()
+    if col_label_map:
+        categories = [col_label_map.get(col, col) for col in categories]
+    categories = [*categories, categories[0]]  # close the radar line
+    
+    label_loc = np.linspace(start=0, stop=2 * np.pi, num=len(categories))
+    
+    plt.figure(figsize=(12, 8))
+    plt.subplot(polar=True)
+    
+    for index, row in df_cluster_centroid.iterrows():
+        centroid = row.tolist()
+        centroid = [*centroid, centroid[0]]
+        
+        # Determine cluster label
+        if cluster_name_map:
+            cluster_num = int(index.split(" ")[1])
+            label = cluster_name_map[cluster_num]
+        else:
+            label = index
+        
+        # Determine color
+        if cluster_colors and label in cluster_colors:
+            color = cluster_colors[label]
+        else:
+            color = None  # matplotlib default
+        
+        plt.plot(label_loc, centroid, label=label, color=color, linewidth=2)
+    
+    plt.title('Cluster mean value comparison', size=13, y=1.05, fontweight="bold")
+    plt.thetagrids(np.degrees(label_loc), labels=categories)
+    
+    plt.legend(
+        loc='upper center',
+        bbox_to_anchor=(0.5, -0.1),
+        ncol=1,
+        fontsize=10
+    )
+
+    # Footnotes
+    plt.figtext(
+    0.3, -0.025,
+    "Note: \nAll values are standardised with standard score",
+    ha="left",
+    va="top",
+    fontsize=9,
+    color="grey")
+
+    plt.subplots_adjust(bottom=0.025)
+    plt.show()
+
+col_label_map = {
+    "dist_to_station_m": "Distance to \nTrain Station",
+    "mean_AI": "PTAL \nAccess Index",
+    "dph_LSOA": "Existing dwellings \nper hectare",
+}
+
+radar_plot_cluster_centroids(
+    df_centroids_scaled,
+    cluster_name_map=cluster_name_map,
+    col_label_map=col_label_map,
+    cluster_colors=cluster_colors
+)
+```
+
+The “default yes” policy might speed up housing supply, more through time-cost saving rather than through improved chances of approval. While its causes are laudable, its methodology ought to be more refined, and the quality that is sacrificed for speed deserves our attention. [Consultation about the new policy](https://www.gov.uk/government/consultations/national-planning-policy-framework-proposed-reforms-and-other-changes-to-the-planning-system) is now in progress, and some details are still in the mist. We will wait and see how it goes.
+
+{{< pagebreak >}}
+
+## **Technical Appendix**
+
+The following bits might be a bit harder to read, but if you are interested in diving deeper, this section sets out some further evidence, and evaluates the robustness of the arguments I have made.
+
+#### Additional Analysis Materials
+
+```{python}
+# plot 2 correlation matrices for LSOA with and without log
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+def plot_corr_matrix(ax, df, title, col_label_map):
+    """
+    Plot a Pearson correlation matrix on a given axis.
+    """
+    corr = df.corr(numeric_only=True)
+
+    # Plot matrix
+    cax = ax.matshow(corr, cmap="coolwarm", vmin=-1, vmax=1)
+
+    # Map labels
+    labels = [col_label_map.get(col, col) for col in corr.columns]
+
+    ax.set_xticks(range(len(labels)))
+    ax.set_yticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=90)
+    ax.set_yticklabels(labels)
+
+    # Annotate coefficients
+    for i in range(corr.shape[0]):
+        for j in range(corr.shape[1]):
+            ax.text(
+                j, i, f"{corr.iloc[i, j]:.2f}",
+                ha="center", va="center",
+                color="white",
+                fontsize=13,
+                fontweight="bold"
+            )
+
+    ax.set_title(title, pad=15)
+
+    return cax
+```
+
+```{python}
+# Label mapping
+col_label_map = {
+    "dist_to_station_m": "Distance to \nTrain Station",
+    "mean_AI": "PTAL \nAccess Index",
+    "dph_LSOA": "Existing dwellings \nper hectare",
+}
+
+# Create figure with two subplots
+fig, axes = plt.subplots(ncols=2, figsize=(12, 6))
+
+# Left: no log
+cax1 = plot_corr_matrix(
+    ax=axes[0],
+    df=df_corr,
+    title="Correlation Matrix (No log transformation)",
+    col_label_map=col_label_map
+)
+
+# Right: log-transformed
+cax2 = plot_corr_matrix(
+    ax=axes[1],
+    df=gdf_corr_plot,
+    title="Correlation Matrix (Log-log-transformed)",
+    col_label_map=col_label_map
+)
+
+# Footnotes
+plt.figtext(
+    -0.07, 0.01,
+    "\nNote: Pearson Correlation Coefficient marked in white, all p_values <= 0.001",
+    ha="left",
+    va="top",
+    fontsize=12,
+    color="black"
+)
+
+# colour bar
+# Create a colourbar axis between the two plots
+cbar_ax = fig.add_axes([-0.07, 0.05, 0.02, 0.7])
+fig.colorbar(cax1, cax=cbar_ax)
+
+# overall title
+fig.suptitle(
+    "Relationship between housing density and transport accessibility (LSOA level)",
+    fontsize=20,
+    fontweight="bold",
+    ha="center",
+    y=1.02,
+    x=0.45
+)
+
+plt.tight_layout()
+plt.show()
+```
+
+As shown above, PTAL Access Index demonstrates stronger correlation with existing housing density compared to distance to train stations. Also, depending on whether log-transformed, distance to train stations only explains about **`{python} f"{R2:,.0f}%"`** to **`{python} f"{R2_log:,.0f}%"`** of the variations in transport accessibility.[^4] These further reinforce the call for taking finer PTAL measures into account, if we are to give the right level of support to housebuilding at the location with the right level of transport sustainability.
+
+[^4]: Figures are obtained through getting R-squared by squaring Pearson Correlation Coefficient
+
+```{python}
+# pairplot for LSOA with log
+
+
+g = sns.pairplot(
+    gdf_corr_plot.rename(columns=col_label_map),
+    kind="reg",
+    diag_kind="kde"
+)
+
+g.fig.suptitle(
+    "log-transformed pairwise relationship",
+    fontsize=12,
+    fontweight="bold",
+    y=1.02
+)
+
+plt.show()
+```
+
+```{python}
+# pairplot for LSOA without Log 
+
+
+g = sns.pairplot(
+    df_corr.rename(columns=col_label_map),
+    kind="reg",
+    diag_kind="kde"
+)
+
+g.fig.suptitle(
+    "no log transformation pairwise relationship",
+    fontsize=12,
+    fontweight="bold",
+    y=1.02
+)
+
+plt.show()
+```
+
+Since the datasets have long-tail distributions, they were log-transformed in the main article’s scatter plot to better uncover and visualise the correlation.
+
+#### Dealing with the planning applications database – behind the scenes
+
+Major planning applications were queried from the [Planning London Datahub](https://planningdata.london.gov.uk/dashboard/app/kibana_overview#/)[^5] by connecting to its public API and writing an Elastic Search Query to filter for applications with valid dates from 2021 to 2025 and with 10 or more proposed residential units. **`{python} f"{len(df_major):,.0f}"`** records were initially obtained. In the data cleaning process, I first inspected the decisions field, and removed **`{python} f"{no_decision_sum:,.0f}"`** records that do not have a definite decision (for example, being shown as undetermined, referred to higher-level government, etc.). I grouped other decision values to either “approved” or “refused” using my understanding of the planning system. I then removed another **`{python} f"{len(gdf_major_nocoord):,.0f}"`** records that do not have valid coordinate locations.
+
+[^5]: Dataset by the GLA
+
+Despite their regular checking, [the GLA cannot guarantee data accuracy](https://www.london.gov.uk/programmes-strategies/planning/digital-planning/planning-london-datahub?ac-60574=60569) as the data were submitted to the GLA by independent boroughs. If there are many missing values in the proposed number of dwellings field of the database, the dataset I started with can be largely incomplete. To sense-check that the number of applications fetched is a good approximation of the actual number of major residential applications in London, I compared it against the number of major residential applications decided in a London borough per year. For example, this figure would be around [15 for LB Ealing](https://www.ealing.gov.uk/download/downloads/id/21149/barriers_to_delivery_and_action_plan.pdf) on average. Multiplying 15 by 32 boroughs and then by 5 years, we get 2400 applications, roughly near the number of **`{python} f"{len(df_major):,.0f}"`**.
+
+#### Clustering – behind the scenes
+
+K-means clustering was used to group Lower Layer Super Output Areas (LSOAs) in London into clusters based on the 3 following variables, all of which display strong positive spatial autocorrelation seen from the Moran’s I values. This resulted in geographically coherent clusters even when I did not impose spatial constraints to the clustering.
+
+```{python}
+# Moran's I calculation
+import numpy as np
+from esda.moran import Moran
+from libpysal.weights import Queen
+
+w = Queen.from_dataframe(LSOA)
+
+# Set seed for reproducibility
+np.random.seed(123456)
+# Calculate Moran's I for each variable
+mi_results = [
+    Moran(LSOA[variable], w) for variable in cols_for_clustering
+]
+# Structure results as a list of tuples
+mi_results = [
+    (variable, res.I, res.p_sim)
+    for variable, res in zip(cols_for_clustering, mi_results)
+]
+# Display on table
+table = pd.DataFrame(
+    mi_results, columns=["Variable", "Moran's I", "P-value"]
+).set_index("Variable")
+
+# rename variables
+col_label_map = {
+    "dist_to_station_m": "Distance to Train Station",
+    "mean_AI": "PTAL Access Index",
+    "dph_LSOA": "Existing dwellings per hectare",
+}
+table = table.rename(index=col_label_map)
+table
+```
+
+```{python}
+# Elbow for K-Means
+
+inertias = []
+k_values = range(2, 11)  # try k = 2 to 10
+
+for k in k_values:
+    kmeans = KMeans(
+        n_clusters=k,
+        random_state=42,
+        n_init="auto"
+    )
+    kmeans.fit(gdf_LSOA_scaled[cols_for_clustering])
+    inertias.append(kmeans.inertia_)
+
+plt.figure()
+plt.plot(k_values, inertias, marker="o")
+plt.xlabel("Number of clusters (k)")
+plt.ylabel("Inertia (within-cluster sum of squares)")
+plt.title("K-means: Elbow plot",
+         fontsize = 12,
+         fontweight = "bold"
+         )
+plt.xticks(k_values)
+plt.show()
+```
+
+Purely based on the Elbow plot, 6 clusters appears to be a good balance between minimising inertia and retaining interpretability. However, to better pick up nuances and allow for opportunity areas for further densification to be identified, I chose to have 7 clusters instead.
+
+#### Limitations of raw data
+
+Other than the data quality issue of missing entries, the planning applications database also has another inherent weakness: the same scheme can sometimes have more than one associated application. It can get refused at first, be revised and approved after re-submission. The data also contains some applications made to vary existing applications. Therefore, some cases can be over-represented in the database, affecting the estimation of decision times and approval rates. My analysis results should not be used to measure housing delivery, for the reasons above, as well as that having a permission does not mean the developer would necessarily start construction.
+
+Moreover, the PTAL dataset [does not account for](https://content.tfl.gov.uk/connectivity-assessment-guide.pdf) travel destinations available at each location. It equally does not reflect service quality.
+
+#### Limitations of my methodology
+
+The 800m buffer was set on the basis of Euclidean distance throughout the analysis, since the future detailed policies may also adopt an Euclidean approach for easy administration. A buffer based on travel time mapping, however, will provide a more accurate reflection of the actual walkable route from the train station.
+
+In the clustering, I used dwellings per hectare to identify where to densify. Yet, dwelling density is only a proxy of building density[^6]. In office-predominant areas further densification is difficult, but they could be highlighted as opportunity areas in the map. Also, the map only provides broad-stroke opportunity areas for high-level strategic planning. It has not been overlayed with actual site constraints/planning designations preventing development.
+
+[^6]: Measured in floor-area-ratio (FAR)
+
+#### Limitations of my arguments
+
+Building more in accessible places, no matter through considering PTAL as I argue for, or through setting a train frequency threshold that the government proposes, grounds on the assumption that transport infrastructure remains static during development. Yet, in reality, train companies might, subject to technical feasibility, increase train frequency when a batch of new residents move in around the station. New stations can also be built in strategic growth areas. This reflects a classic chicken-egg dilemma between housing and infrastructure. My data analysis still sits within the frame of developing in transit-oriented locations, but the alternative frame of developing a location to make it transit-oriented is also valid to an extent.
+
+#### Further research area
+
+Since the government also proposed that residential applications around train stations would be refused if they do not reach at least 40-50 dwellings per hectare in the net developable area of the site, it will be equally interesting to investigate how many past major residential applications in London have already met this threshold. I have faced significant difficulty in trying to clean up the site area field from the applications database as its values have mixed units in either m^2^ or hectares, so I did not go down this route. However, this remains an interesting possibility for further research.
+
+#### Full reproducible code
+
+The reproducible .qmd file used to generate this analysis piece can be found on my GitHub by clicking [here](https://github.com/BoscoChoi/Housing_Default_Yes_Project).
