@@ -1065,12 +1065,7 @@ df_centroids.index = [f"Cluster {i}" for i in range(k_val)]
 ```
 
 ```{python}
-# cluster map
-
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-
-# cluster colour scheme
+# cluster colour scheme (shared by both map variants and radar chart)
 cluster_colors = {
     "Inner–Outer London Transition Zone (less dense, high accessibility)": "#8BC34A",  # soft green
     "Inner–Outer London Transition Zone (dense, medium accessibility)": "#E57373",   # soft red
@@ -1078,57 +1073,116 @@ cluster_colors = {
     "Very Remote Suburbs": "#BA68C8", # soft purple
     "Remote Suburbs": "#64B5F6",      # soft blue
     "Central London": "#FFB74D",      # soft orange
-    "Dense Enclaves": "grey"       # grey
+    "Dense Enclaves": "#808080"       # grey (hex for folium and matplotlib)
 }
+```
 
-# Plot map
+::: {.content-visible when-format="html"}
+```{python}
+#| label: fig-cluster-map-interactive
+# Interactive cluster map (HTML only)
+
+import folium
+from folium import GeoJson
+
+# Ensure LSOA is in WGS84 for folium
+LSOA_wgs84 = LSOA.to_crs(epsg=4326)
+
+def style_fn(feature):
+    name = feature.get("properties", {}).get("cluster_name", "")
+    color = cluster_colors.get(name, "#cccccc")
+    return {
+        "fillColor": color,
+        "color": color,
+        "weight": 0.5,
+        "fillOpacity": 0.5,
+    }
+
+m = folium.Map(
+    location=[51.5074, -0.1278],
+    zoom_start=9,
+    tiles="CartoDB positron",
+    control_scale=True,
+)
+
+g = GeoJson(
+    LSOA_wgs84.__geo_interface__,
+    style_function=style_fn,
+    name="LSOA clusters",
+)
+g.add_to(m)
+
+# Title (top) and legend (bottom)
+title_html = """
+<div style="position: fixed; top: 10px; left: 50px; z-index: 1000;
+     background: white; padding: 8px 12px; border: 1px solid grey; border-radius: 4px;
+     font-size: 14px; font-weight: bold; box-shadow: 0 1px 3px rgba(0,0,0,0.2); max-width: 420px;">
+     How do existing neighbourhoods exhibit clustering for density and transport accessibility?
+</div>
+"""
+legend_html = """
+<div style="position: fixed; bottom: 30px; right: 30px; z-index: 1000;
+     background: white; padding: 5px 8px; border: 1px solid grey; border-radius: 4px;
+     font-size: 9px; line-height: 1.2; box-shadow: 0 1px 3px rgba(0,0,0,0.2); max-width: 220px;">
+     <p style="margin: 0 0 4px 0; font-size: 9px;"><b>Cluster</b></p>
+"""
+for cluster, color in cluster_colors.items():
+    legend_html += f'<span style="display:block; margin-bottom:1px;"><i style="background:{color}; width:8px; height:8px; display:inline-block; margin-right:4px; border:1px solid #333; vertical-align:middle;"></i> <span style="vertical-align:middle;">{cluster}</span></span>'
+legend_html += """
+     <p style="margin: 6px 0 0 0; font-size: 7px; color: #666;">
+     Source: VOA (2024); TfL (2023); OS (2025)
+     </p>
+</div>
+"""
+m.get_root().html.add_child(folium.Element(title_html))
+m.get_root().html.add_child(folium.Element(legend_html))
+
+folium.LayerControl(collapsed=False).add_to(m)
+m
+```
+:::
+
+::: {.content-visible when-format="pdf"}
+```{python}
+# Static cluster map (PDF only)
+
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 
 fig, ax = plt.subplots(1, 1, figsize=(10, 10))
 
 LSOA.plot(
-    color=LSOA["cluster_name"].map(cluster_colors),  # map cluster to manual color
+    color=LSOA["cluster_name"].map(cluster_colors),
     linewidth=0.2,
     edgecolor=None,
     legend=False,
     ax=ax
 )
 
-# Create legend patches
 patches = [mpatches.Patch(color=color, label=cluster) for cluster, color in cluster_colors.items()]
-
-# Add legend with precise positioning
 ax.legend(
     handles=patches,
-#    title="Cluster Name",
     loc='lower left',
-    bbox_to_anchor=(0, -0.07),  # move it slightly down
+    bbox_to_anchor=(0, -0.07),
     fontsize=8,
     title_fontsize=10,
     frameon=True,
     framealpha=0.9
 )
-
-# Footnotes
 plt.figtext(
     0.5, 0.15,
     "Source: \nHousing Stock: Valuation Office Agency(2024)\nPTAL: TfL(2023)\nTrain Station: Ordinance Survey(2025)",
-    ha="left",
-    va="top",
-    fontsize=9,
-    color="grey"
+    ha="left", va="top", fontsize=9, color="grey"
 )
-
-#title
 ax.set_title(
-    "How do existing neighbourhoods exhibit clustering \nfor density and transport accessibility?", 
-    fontsize=20,
-    fontweight="bold",
-    loc="left"
+    "How do existing neighbourhoods exhibit clustering \nfor density and transport accessibility?",
+    fontsize=20, fontweight="bold", loc="left"
 )
 ax.set_axis_off()
 plt.tight_layout()
 plt.show()
 ```
+:::
 
 ```{python}
 # radar chart viz for multiple dimensions
@@ -1314,45 +1368,44 @@ As shown above, PTAL Access Index demonstrates stronger correlation with existin
 
 [^4]: Figures are obtained through getting R-squared by squaring Pearson Correlation Coefficient
 
+::::: {.columns}
+::: {.column width="50%"}
 ```{python}
 # pairplot for LSOA with log
-
-
 g = sns.pairplot(
     gdf_corr_plot.rename(columns=col_label_map),
     kind="reg",
-    diag_kind="kde"
+    diag_kind="kde",
+    height=2.2
 )
-
 g.fig.suptitle(
     "log-transformed pairwise relationship",
-    fontsize=12,
+    fontsize=14,
     fontweight="bold",
     y=1.02
 )
-
 plt.show()
 ```
-
+:::
+::: {.column width="50%"}
 ```{python}
-# pairplot for LSOA without Log 
-
-
+# pairplot for LSOA without log
 g = sns.pairplot(
     df_corr.rename(columns=col_label_map),
     kind="reg",
-    diag_kind="kde"
+    diag_kind="kde",
+    height=2.2
 )
-
 g.fig.suptitle(
     "no log transformation pairwise relationship",
-    fontsize=12,
+    fontsize=14,
     fontweight="bold",
     y=1.02
 )
-
 plt.show()
 ```
+:::
+:::::
 
 Since the datasets have long-tail distributions, they were log-transformed in the main article’s scatter plot to better uncover and visualise the correlation.
 
