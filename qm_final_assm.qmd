@@ -1112,18 +1112,18 @@ g = GeoJson(
 )
 g.add_to(m)
 
-# Title (top) and legend (bottom)
+# Title (top) with (interactive) and legend as toggle button
 title_html = """
 <div style="position: fixed; top: 10px; left: 50px; z-index: 1000;
      background: white; padding: 8px 12px; border: 1px solid grey; border-radius: 4px;
      font-size: 14px; font-weight: bold; box-shadow: 0 1px 3px rgba(0,0,0,0.2); max-width: 420px;">
-     How do existing neighbourhoods exhibit clustering for density and transport accessibility?
+     How do existing neighbourhoods exhibit clustering for density and transport accessibility? (interactive)
 </div>
 """
 legend_html = """
-<div style="position: fixed; bottom: 30px; right: 30px; z-index: 1000;
-     background: white; padding: 5px 8px; border: 1px solid grey; border-radius: 4px;
-     font-size: 9px; line-height: 1.2; box-shadow: 0 1px 3px rgba(0,0,0,0.2); max-width: 220px;">
+<div style="position: fixed; bottom: 30px; right: 30px; z-index: 1000;">
+  <button type="button" onclick="var p=document.getElementById('folium-cluster-legend-panel'); p.style.display=(p.style.display==='none'?'block':'none'); this.textContent=(p.style.display==='none'?'Show legend':'Hide legend');" style="padding: 6px 10px; font-size: 11px; cursor: pointer; background: white; border: 1px solid grey; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.2);">Show legend</button>
+  <div id="folium-cluster-legend-panel" style="display: none; margin-top: 6px; background: white; padding: 5px 8px; border: 1px solid grey; border-radius: 4px; font-size: 9px; line-height: 1.2; box-shadow: 0 1px 3px rgba(0,0,0,0.2); max-width: 220px;">
      <p style="margin: 0 0 4px 0; font-size: 9px;"><b>Cluster</b></p>
 """
 for cluster, color in cluster_colors.items():
@@ -1132,6 +1132,7 @@ legend_html += """
      <p style="margin: 6px 0 0 0; font-size: 7px; color: #666;">
      Source: VOA (2024); TfL (2023); OS (2025)
      </p>
+  </div>
 </div>
 """
 m.get_root().html.add_child(folium.Element(title_html))
@@ -1142,9 +1143,8 @@ m
 ```
 :::
 
-::: {.content-visible when-format="pdf"}
 ```{python}
-# Static cluster map (PDF only)
+# Static cluster map (always shown for PDF and HTML)
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
@@ -1176,13 +1176,12 @@ plt.figtext(
 )
 ax.set_title(
     "How do existing neighbourhoods exhibit clustering \nfor density and transport accessibility?",
-    fontsize=20, fontweight="bold", loc="left"
+    fontsize=14, fontweight="bold", loc="left"
 )
 ax.set_axis_off()
 plt.tight_layout()
 plt.show()
 ```
-:::
 
 ```{python}
 # radar chart viz for multiple dimensions
